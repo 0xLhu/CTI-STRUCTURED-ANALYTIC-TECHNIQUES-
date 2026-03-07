@@ -1,0 +1,215 @@
+meta:
+  created: '2026-03-07T18:10:31.869132'
+  updated: '2026-03-07T19:05:47.220079'
+  analyst: nba
+  case_id: cti-unc3886
+  ioc: 103.254.253.210
+  tlp: WHITE
+  geopolitical_context: UNC3886 suspected campaign singapore telecom feb 2026
+ach:
+  hypotheses:
+  - label: UNC3886
+    description: CHine APT targeting network edge devices telecom sector apac
+  - label: APT40
+    description: CHinese apt alternative similar infra profile
+  - label: Criminal
+    description: Opportunistic actor cyptominer or botnet
+  - label: Uknown
+    description: Unattributed insufficiant evidence
+  evidence:
+  - description: header server xxxxxx-xxxxxx non-standard fortigate
+    reliability: A
+    source: shodan
+  - description: certificat ca support sha1 RSA1024 emis 2014
+    reliability: A
+    source: censys
+  - description: firmware last-modified 2018 EOL
+    reliability: A
+    source: Shodan
+  - description: discordance ASN Zonetel vs starhub
+    reliability: B
+    source: VT
+  - description: mac address spoofé sur vps multicanaux signature orb
+    reliability: B
+    source: shodan
+  - description: passive dns remotewd.com anomalie comportementale
+    reliability: B
+    source: ct
+  - description: Cryptominer minergate confirmer sur domaine associe
+    reliability: A
+    source: VT
+  - description: Custer 3 ip zonetel meme patterns header et cert
+    reliability: B
+    source: shodan
+  matrix:
+    '0_0': CC
+    '0_1': C
+    '0_2': N
+    '0_3': N
+    '1_0': CC
+    '1_1': C
+    '1_2': N
+    '1_3': N
+    '2_0': CC
+    '2_1': CC
+    '2_2': C
+    '2_3': N
+    '3_0': C
+    '3_1': C
+    '3_2': N
+    '3_3': N
+    '4_0': CC
+    '4_1': C
+    '4_2': I
+    '4_3': N
+    '5_0': C
+    '5_1': N
+    '5_2': C
+    '5_3': N
+    '6_0': II
+    '6_1': II
+    '6_2': CC
+    '6_3': N
+    '7_0': CC
+    '7_1': C
+    '7_2': N
+    '7_3': N
+  scores:
+    0:
+      total: 10
+      inconsistencies: 2
+      confidence_pct: 81
+    1:
+      total: 5
+      inconsistencies: 2
+      confidence_pct: 65
+    2:
+      total: 3
+      inconsistencies: 1
+      confidence_pct: 59
+    3:
+      total: 0
+      inconsistencies: 0
+      confidence_pct: 50
+  conclusion:
+    leading_hypothesis: 0
+    confidence_pct: 71
+    confidence_label: MEDIUM
+    rationale: FortiGate EOL cluster with masked headers, non-official certificates
+      and ORB MAC
+    caveats: pattern is consistent with UNC3886 documented TTPs. E7 cryptominer is
+      assessed
+    confirm_indicators:
+    - as a distinct opportunistic actor on same infrastructure.TINYSHELL process or
+      binary inddentified on fortigate firmware
+    - addtional fortigate eol with same masked header pattern in APAC
+    - CVE-2025-21590 exploit attempt on zonetel networ range
+    - C2 callback to known UNC3386 infrastructure
+    refute_indicators:
+    - malware on infrastructure identifed as on chinese apt tooling
+    - zonetel confirms legitimate ownership of anomalous devices
+    - no eol devices found on targeted operator networks
+kac:
+  assumptions:
+  - text: Zonetel infrastructure is compromised not legitimate
+    certainty: 2
+    impact: 5
+    challenge: Zonetel confirms devices are legitimate research nodes
+  - text: Masked HTTP header is post-compromise not misconfiguration
+    certainty: 3
+    impact: 4
+    challenge: Vendor confirms header valid in some FortiOS versions
+  - text: UNC3886 campaign still active in 2026 not historical
+    certainty: 2
+    impact: 5
+    challenge: No new C2 activity observed after December 2025
+  - text: ORB MAC pattern is deliberate evasion not coincidence
+    certainty: 3
+    impact: 3
+    challenge: MAC range assigned to legitimate hardware vendor
+  - text: FortiGate EOL devices under adversary control
+    certainty: 2
+    impact: 5
+    challenge: Firmware analysis shows no backdoor only unpatched CVEs
+  - text: remotewd.com DNS link connects to same campaign
+    certainty: 1
+    impact: 3
+    challenge: NAS device auto-registration explains DNS resolution
+iw:
+  scenarios:
+  - label: UNC3886 active FortiGate compromise Singapore telecoms
+    indicators:
+    - text: FortiGate header Server xxxxxxxx-xxxxx observed on new IPs
+      type: CONFIRM
+      mitre: T1600
+      source: Shodan
+      observed: 'YES'
+      observation_note: Observed on 103.254.253.210 and 103.254.253.78 via Shodan
+    - text: Firmware updated to supported version on all Zonetel devices
+      type: REFUTE
+      mitre: ''
+      source: Shodan
+      observed: 'NO'
+    - text: Anomalous TACACS+ traffic on telecom management network
+      type: MONITOR
+      mitre: T1556
+      source: SIEM
+      observed: UNKNOWN
+  - label: Opportunistic cryptominer on exposed NAS Asia telecoms
+    indicators:
+    - text: Non-official TLS certificate CA support on port 8443
+      type: CONFIRM
+      mitre: T1553.004
+      source: Censys
+      observed: 'YES'
+      observation_note: SHA1/RSA1024 cert 2014 found via Censys on 103.254.253.210
+    - text: Zonetel confirms legitimate ownership and no compromise
+      type: REFUTE
+      mitre: ''
+      source: OSINT
+      observed: 'NO'
+    - text: New ASN discordance on Singapore IP ranges
+      type: MONITOR
+      mitre: T1583.003
+      source: VirusTotal
+      observed: 'YES'
+      observation_note: Zonetel AS132526 vs StarHub AS4657 confirmed via VirusTotal
+da:
+  leading_hypothesis: 'H1: UNC3886 — CHine APT targeting network edge devices telecom
+    sector apac'
+  alternative_hypothesis: →  False flag or misattribution Chinese criminal actor mimicking
+    APT TTPs
+  challenges:
+  - area: False Flag
+    hint: Could another actor be mimicking the TTPs of your leading hypothesis?
+    argument: →  UNC3886 TTPs are publicly documented any actor could replicate them
+    strength: 3
+  - area: Shared Tooling
+    hint: Are the tools used publicly available? Could any actor have used them?
+    argument: →  FortiGate EOL targeting is common across multiple Chinese actors
+      and criminals
+    strength: 3
+  - area: Coincidence
+    hint: Could the behavioral signals be explained by non-malicious activity?
+    argument: Zonetel may operate legitimate EOL devices with non-standard configs
+    strength: 2
+  - area: Misidentification
+    hint: Could the infrastructure belong to a different actor or be compromised by
+      a third party?
+    argument: Infrastructure could belong to a third party compromised by different
+      actor
+    strength: 4
+  - area: Confirmation Bias
+    hint: What evidence did you find FIRST that anchored your conclusion?
+    argument: Mandiant UNC3886 report anchored attribution before investigation started
+    strength: 4
+  - area: Missing Evidence
+    hint: What evidence would you expect to see IF your hypothesis were true, but
+      you have NOT found?
+    argument: No TINYSHELL binary found no direct link to known UNC3886 malware family
+    strength: 5
+  revised: false
+  new_conclusion: ''
+  new_confidence: null
+  final_note: Attribution remains MEDIUM confidence pending malware confirmation no
+    TINYSHELL identified
