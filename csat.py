@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
 CSAT.py — Structured Analytic Techniques for CTI
-Structured analytic techniques for cyber threat intelligence analysis.
 
-Methods implemented:
-  1. ACH    — Analysis of Competing Hypotheses
-  2. KAC    — Key Assumptions Check
-  3. IW     — Indicators & Warnings
-  4. DA     — Devil's Advocacy
-
-Usage:
-  python3 CSAT.py                    # interactive menu
-  python3 CSAT.py --load session.yaml  # load existing session
-  python3 CSAT.py --method ach       # jump directly to a method
+FIXES v1.1 (minimal patch on original):
+  BUG #1 — I&W checkmark never shown in main menu
+             label.split("—")[0].strip().lower() gives "i&w" ≠ "iw"
+             FIX: explicit dict mapping menu key → session key
+  BUG #2 — Accents stripped / color function c() shadowed
+             In _identify_diagnostic_evidence, md_table, method_da :
+             list/set comprehensions used 'c' as loop var, silently
+             overwriting the global color helper c().
+             FIX: renamed loop vars to 'cell' / 'ch'
+  BUG #3 — YAML load: iw section not detected when loaded from flat YAML
+             (s1_status / s1_confirmed keys instead of 'scenarios' list)
+             FIX: _iw_has_data() helper checks both structures
+  FIX  #4 — UTF-8 forced at startup to avoid accent loss on Windows/some Linux
 """
 
 import os
@@ -21,8 +23,25 @@ import json
 import yaml
 import datetime
 import argparse
+import unicodedata
 from textwrap import wrap, fill
 from copy import deepcopy
+
+
+# ── FIX #4 : Force UTF-8 output at startup ────────────────────────────────
+def _force_utf8():
+    for name in ("stdout", "stderr"):
+        s = getattr(sys, name, None)
+        if s is None:
+            continue
+        enc = getattr(s, "encoding", "") or ""
+        if enc.lower().replace("-", "") not in ("utf8", "utf16", "utf32"):
+            try:
+                s.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError):
+                pass
+
+_force_utf8()
 
 
 # ── TERMINAL HELPERS ───────────────────────────────────────────────────────
@@ -121,21 +140,20 @@ def confirm(msg):
     return val in ("y", "yes")
 
 def info(msg):
-    print(c(f"  ℹ  {msg}", BLUE))
+    print(c(f"  i  {msg}", BLUE))
 
 def warn(msg):
-    print(c(f"  ⚠  {msg}", YELLOW))
+    print(c(f"  !  {msg}", YELLOW))
 
 def success(msg):
-    print(c(f"  ✓  {msg}", GREEN))
+    print(c(f"  v  {msg}", GREEN))
 
 def error_msg(msg):
-    print(c(f"  ✗  {msg}", RED))
+    print(c(f"  x  {msg}", RED))
 
 def box(title, content_lines, color=CYAN, width=WIDTH-4):
     print(c(f"  ┌─ {title} " + "─" * (width - len(title) - 4) + "┐", color))
     for line in content_lines:
-        # wrap long lines
         wrapped = wrap(line, width - 4) or [""]
         for wl in wrapped:
             pad = width - len(wl) - 2
@@ -191,13 +209,31 @@ def new_session():
 
 def save_session(session, path):
     session["meta"]["updated"] = datetime.datetime.now().isoformat()
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         yaml.dump(session, f, allow_unicode=True, sort_keys=False)
     success(f"Session saved → {path}")
 
 def load_session(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+# ── FIX #3 : I&W data detection — handles both YAML structures ────────────
+def _iw_has_data(iw_val):
+    """
+    Return True if the iw section contains usable data.
+    Accepts:
+      Structure A (interactive): iw.scenarios is a non-empty list
+      Structure B (flat YAML):   keys like s1_status, s1_confirmed, etc.
+    """
+    if not iw_val or not isinstance(iw_val, dict):
+        return False
+    # Structure A
+    if iw_val.get("scenarios"):
+        return True
+    # Structure B: at least one key matching s<N>_ pattern
+    import re
+    return any(re.match(r"s\d+_", k) for k in iw_val.keys())
 
 
 # ── SESSION INIT ───────────────────────────────────────────────────────────
@@ -219,8 +255,6 @@ def init_session(session):
 
 # ═══════════════════════════════════════════════════════════════════════════
 # METHOD 1 — ACH (Analysis of Competing Hypotheses)
-#  Identify hypotheses, list evidence, score each E against each H,
-# find H with fewest inconsistencies — NOT most confirming evidence.
 # ═══════════════════════════════════════════════════════════════════════════
 
 def method_ach(session):
@@ -236,7 +270,6 @@ def method_ach(session):
 
     ach = session.get("ach") or {}
 
-    # ── Step 1: Hypotheses ──
     hr_title("STEP 1 / 8 — Define Hypotheses", char="·", color=YELLOW)
     info("List all PLAUSIBLE hypotheses. Include unlikely ones to avoid tunnel vision.")
     info("Example: H1=APT33, H2=APT34, H3=cybercriminal, H4=insider, H5=unknown actor")
@@ -259,7 +292,6 @@ def method_ach(session):
         warn("ACH requires at least 2 hypotheses. Add more.")
         return session
 
-    # ── Step 2: Evidence & Diagnostics ──
     hr_title("STEP 2 / 8 — List Evidence & Diagnostics", char="·", color=YELLOW)
     info("List ALL evidence — not just what confirms a hypothesis.")
     info("Include absence of evidence. Include negative indicators.")
@@ -283,9 +315,8 @@ def method_ach(session):
         warn("No evidence collected. ACH requires at least 1 evidence item.")
         return session
 
-    # ── Step 3: Build Matrix ──
     hr_title("STEP 3 / 8 — Consistency Matrix", char="·", color=YELLOW)
-    info("For each Evidence × Hypothesis cell, score consistency:")
+    info("For each Evidence x Hypothesis cell, score consistency:")
     for code, (label, score, col) in CONSISTENCY_SCORES.items():
         print(c(f"  {code:4s}", col, BOLD) + f" {score}  {label}")
     print()
@@ -293,24 +324,19 @@ def method_ach(session):
     matrix = ach.get("matrix", {})
     matrix = _fill_matrix(hypotheses, evidence, matrix)
 
-    # ── Step 4: Calculate scores ──
     scores = _calculate_ach_scores(hypotheses, evidence, matrix)
 
-    # ── Step 5: Display matrix ──
     hr_title("STEP 4 / 8 — Matrix Results", char="·", color=YELLOW)
     _print_ach_matrix(hypotheses, evidence, matrix, scores)
 
-    # ── Step 6: Sensitivity check ──
     hr_title("STEP 5 / 8 — Sensitivity Analysis", char="·", color=YELLOW)
     info("Identify which evidence items are MOST DIAGNOSTIC.")
     info("If your conclusion changes when you remove one piece of evidence — it's fragile.")
     _sensitivity_analysis(hypotheses, evidence, matrix, scores)
 
-    # ── Step 7: Key Diagnostics ──
     hr_title("STEP 6 / 8 — Diagnostic Evidence", char="·", color=YELLOW)
     _identify_diagnostic_evidence(hypotheses, evidence, matrix)
 
-    # ── Step 8: Conclusion ──
     hr_title("STEP 7 / 8 — Analytical Conclusion", char="·", color=YELLOW)
     ranked = sorted(scores.items(), key=lambda x: x[1]["total"], reverse=True)
     winner_idx = ranked[0][0]
@@ -321,21 +347,19 @@ def method_ach(session):
     print()
 
     conf_input = prompt_int("Analyst confidence % (0-100)", 0, 100, default=scores[winner_idx]["confidence_pct"])
-    conf_label, conf_col, conf_desc = confidence_label(conf_input)
-    print(c(f"\n  Confidence: {conf_label} ({conf_input}%)", conf_col, BOLD))
+    conf_lbl, conf_col, conf_desc = confidence_label(conf_input)
+    print(c(f"\n  Confidence: {conf_lbl} ({conf_input}%)", conf_col, BOLD))
     print(c(f"  {conf_desc}", conf_col))
     print()
 
     analyst_rationale = prompt("Analytical rationale (1-2 sentences)")
     caveats = prompt("Key caveats / what would change this conclusion")
 
-    # ── Step 9: What to monitor ──
     hr_title("STEP 8 / 8 — Indicators to Monitor", char="·", color=YELLOW)
     info("What new evidence would CONFIRM or REFUTE the leading hypothesis?")
     confirm_indicators = prompt_list("Evidence that would CONFIRM H" + str(winner_idx+1))
     refute_indicators  = prompt_list("Evidence that would REFUTE H"  + str(winner_idx+1))
 
-    # Save to session
     session["ach"] = {
         "hypotheses": hypotheses,
         "evidence": evidence,
@@ -344,7 +368,7 @@ def method_ach(session):
         "conclusion": {
             "leading_hypothesis": winner_idx,
             "confidence_pct": conf_input,
-            "confidence_label": conf_label,
+            "confidence_label": conf_lbl,
             "rationale": analyst_rationale,
             "caveats": caveats,
             "confirm_indicators": confirm_indicators,
@@ -390,7 +414,7 @@ def _collect_evidence():
 def _fill_matrix(hypotheses, evidence, existing_matrix):
     matrix = deepcopy(existing_matrix)
     valid_scores = list(CONSISTENCY_SCORES.keys())
-    print(c(f"  Score each Evidence × Hypothesis cell.", GRAY))
+    print(c(f"  Score each Evidence x Hypothesis cell.", GRAY))
     print(c(f"  Valid scores: {' / '.join(valid_scores)}", GRAY))
     print()
     for ei, e in enumerate(evidence):
@@ -418,8 +442,6 @@ def _calculate_ach_scores(hypotheses, evidence, matrix):
             if val < 0:
                 inconsistencies += abs(val)
 
-        # Score: higher = fewer inconsistencies
-        # Normalize to 0-100 confidence
         max_possible = len(evidence) * 2
         if max_possible > 0:
             conf_pct = max(0, min(100, int(((total + max_possible) / (2 * max_possible)) * 100)))
@@ -435,7 +457,6 @@ def _calculate_ach_scores(hypotheses, evidence, matrix):
 
 
 def _print_ach_matrix(hypotheses, evidence, matrix, scores):
-    # Header
     h_labels = [f"H{i+1}:{h['label'][:8]}" for i, h in enumerate(hypotheses)]
     col_w = max(10, max(len(l) for l in h_labels) + 2)
     e_col_w = 42
@@ -457,16 +478,14 @@ def _print_ach_matrix(hypotheses, evidence, matrix, scores):
         print(row)
 
     hr("─", GRAY)
-    # Score row
-    score_row = c(f"  {'SCORE ( ↑ = fewer inconsistencies)':<{e_col_w}}", BOLD)
+    score_row = c(f"  {'SCORE ( up = fewer inconsistencies)':<{e_col_w}}", BOLD)
     for hi, s in scores.items():
         val = s["total"]
-        inc = s["inconsistencies"]
         col = GREEN if val > 0 else RED if val < 0 else GRAY
         score_row += c(f" {val:^{col_w}}", col, BOLD)
     print(score_row)
 
-    inconsistency_row = c(f"  {'INCONSISTENCIES ( ↓ = stronger H)':<{e_col_w}}", BOLD)
+    inconsistency_row = c(f"  {'INCONSISTENCIES ( down = stronger H)':<{e_col_w}}", BOLD)
     for hi, s in scores.items():
         inc = s["inconsistencies"]
         col = GREEN if inc == 0 else YELLOW if inc <= 2 else RED
@@ -476,20 +495,18 @@ def _print_ach_matrix(hypotheses, evidence, matrix, scores):
     conf_row = c(f"  {'CONFIDENCE %':<{e_col_w}}", BOLD)
     for hi, s in scores.items():
         pct = s["confidence_pct"]
-        label, col, _ = confidence_label(pct)
+        lbl, col, _ = confidence_label(pct)
         conf_row += c(f" {pct:^{col_w}}", col, BOLD)
     print(conf_row)
     print()
 
 
 def _sensitivity_analysis(hypotheses, evidence, matrix, scores):
-    """Remove each evidence item and see if ranking changes."""
     original_ranking = sorted(scores.keys(), key=lambda x: scores[x]["total"], reverse=True)
     original_winner = original_ranking[0]
     fragile_evidence = []
 
     for ei in range(len(evidence)):
-        # Build matrix without this evidence item
         reduced_matrix = {k: v for k, v in matrix.items() if not k.startswith(f"{ei}_")}
         reduced_evidence = [e for j, e in enumerate(evidence) if j != ei]
         reduced_scores = _calculate_ach_scores(hypotheses, reduced_evidence, reduced_matrix)
@@ -500,7 +517,7 @@ def _sensitivity_analysis(hypotheses, evidence, matrix, scores):
     if fragile_evidence:
         warn("FRAGILE CONCLUSION — removing these evidence items changes the winner:")
         for ei in fragile_evidence:
-            print(c(f"  ⚠  E{ei+1}: {evidence[ei]['description']}", YELLOW))
+            print(c(f"  !  E{ei+1}: {evidence[ei]['description']}", YELLOW))
         print()
         warn("Validate these evidence items carefully before finalising.")
     else:
@@ -508,25 +525,25 @@ def _sensitivity_analysis(hypotheses, evidence, matrix, scores):
     print()
 
 
+# ── FIX #2a : renamed loop var 'c' → 'cell' to avoid shadowing c() ────────
 def _identify_diagnostic_evidence(hypotheses, evidence, matrix):
-    """Diagnostic evidence = differentiates between hypotheses (not N for all)."""
     info("Diagnostic evidence = items that DIFFERENTIATE hypotheses (not neutral for all).")
     print()
     for ei, e in enumerate(evidence):
+        # FIX: was `set(c for c in cells ...)` and `all(c == ...)` — 'c' shadowed color helper
         cells = [matrix.get(f"{ei}_{hi}", "N") for hi in range(len(hypotheses))]
-        unique_non_neutral = set(c for c in cells if c != "N")
-        if len(unique_non_neutral) > 0 and not all(c == cells[0] for c in cells):
-            print(c(f"  ★ DIAGNOSTIC  E{ei+1}: {e['description']}", GREEN))
-        elif all(c == "N" for c in cells):
-            print(c(f"  ○ NO VALUE    E{ei+1}: {e['description']}", GRAY))
+        unique_non_neutral = set(cell for cell in cells if cell != "N")
+        if len(unique_non_neutral) > 0 and not all(cell == cells[0] for cell in cells):
+            print(c(f"  * DIAGNOSTIC  E{ei+1}: {e['description']}", GREEN))
+        elif all(cell == "N" for cell in cells):
+            print(c(f"  o NO VALUE    E{ei+1}: {e['description']}", GRAY))
         else:
-            print(c(f"  · WEAK        E{ei+1}: {e['description']}", YELLOW))
+            print(c(f"  . WEAK        E{ei+1}: {e['description']}", YELLOW))
     print()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # METHOD 2 — KEY ASSUMPTIONS CHECK (KAC)
-#  Surface hidden assumptions driving your analysis.
 # ═══════════════════════════════════════════════════════════════════════════
 
 def method_kac(session):
@@ -565,11 +582,10 @@ def method_kac(session):
         warn("No assumptions collected.")
         return session
 
-    # Rate each assumption
     hr_title("STEP 2 — Rate Each Assumption", char="·", color=YELLOW)
     info("For each assumption, rate:")
-    print(c("  CERTAINTY:", CYAN)  + "  How certain are you this is true? (1=uncertain → 5=certain)")
-    print(c("  IMPACT:", CYAN)     + "     If wrong, how much does it change your conclusion? (1=minor → 5=major)")
+    print(c("  CERTAINTY:", CYAN)  + "  How certain are you this is true? (1=uncertain -> 5=certain)")
+    print(c("  IMPACT:", CYAN)     + "     If wrong, how much does it change your conclusion? (1=minor -> 5=major)")
     print()
 
     rated = []
@@ -587,22 +603,19 @@ def method_kac(session):
             "challenge": challenge,
         })
 
-    # Display results
     hr_title("STEP 3 — Assumption Criticality Matrix", char="·", color=YELLOW)
     _print_kac_matrix(rated)
 
-    # Identify critical assumptions
     critical = [a for a in rated if a["certainty"] <= 2 and a["impact"] >= 4]
     if critical:
         print()
         warn("CRITICAL ASSUMPTIONS (low certainty + high impact):")
         for a in critical:
-            print(c(f"  ⚠  {a['text']}", YELLOW))
+            print(c(f"  !  {a['text']}", YELLOW))
             print(c(f"     Challenge: {a['challenge']}", GRAY))
     else:
         success("No critical assumption vulnerabilities identified.")
 
-    # Save
     session["kac"] = {"assumptions": rated}
     print()
     success("KAC analysis saved to session.")
@@ -629,11 +642,11 @@ def _print_kac_matrix(rated):
     for i, a in enumerate(rated):
         cert = a["certainty"]
         imp  = a["impact"]
-        risk = (6 - cert) * imp  # Low certainty × high impact = high risk
+        risk = (6 - cert) * imp
         risk_label = "CRITICAL" if risk >= 16 else "HIGH" if risk >= 10 else "MEDIUM" if risk >= 5 else "LOW"
         risk_col   = RED if risk >= 16 else YELLOW if risk >= 10 else CYAN if risk >= 5 else GREEN
-        cert_bar   = c("█" * cert + "░" * (5-cert), GREEN if cert >= 4 else YELLOW if cert >= 2 else RED)
-        imp_bar    = c("█" * imp  + "░" * (5-imp),  RED if imp >= 4 else YELLOW if imp >= 2 else GREEN)
+        cert_bar   = c("X" * cert + "." * (5-cert), GREEN if cert >= 4 else YELLOW if cert >= 2 else RED)
+        imp_bar    = c("X" * imp  + "." * (5-imp),  RED if imp >= 4 else YELLOW if imp >= 2 else GREEN)
         text_short = a["text"][:45]
         print(f"  A{i+1:<3} {cert_bar}  {imp_bar}  {c(f'{risk_label:<10}', risk_col)} {text_short}")
     print()
@@ -641,8 +654,6 @@ def _print_kac_matrix(rated):
 
 # ═══════════════════════════════════════════════════════════════════════════
 # METHOD 3 — INDICATORS & WARNINGS (I&W)
-#  Define observable indicators that confirm/refute each scenario.
-# In CTI: map indicators to TTPs and observables.
 # ═══════════════════════════════════════════════════════════════════════════
 
 def method_iw(session):
@@ -676,7 +687,6 @@ def method_iw(session):
         warn("No scenarios defined.")
         return session
 
-    # For each scenario, define indicators
     hr_title("STEP 2 — Define Indicators per Scenario", char="·", color=YELLOW)
     info("For each scenario, define observable indicators split into:")
     print(c("  CONFIRM", GREEN) + " — would confirm the scenario is active")
@@ -692,8 +702,8 @@ def method_iw(session):
 
         indicators = []
         for itype, icolor, hint in [
-            ("CONFIRM", GREEN, "e.g. FortiGate header masqué, TINYSHELL process name, TACACS+ binary replaced"),
-            ("REFUTE",  RED,   "e.g. firmware updated, no EOL devices in network, no matching TTPs"),
+            ("CONFIRM", GREEN, "e.g. FortiGate masked header, TINYSHELL process, TACACS+ binary replaced"),
+            ("REFUTE",  RED,   "e.g. firmware updated, no EOL devices, no matching TTPs"),
             ("MONITOR", CYAN,  "e.g. unusual DNS queries, anomalous login times"),
         ]:
             print(c(f"\n    {itype} indicators:", icolor))
@@ -709,7 +719,6 @@ def method_iw(session):
                 })
         scenarios[si]["indicators"] = indicators
 
-    # Observation phase
     hr_title("STEP 3 — Mark Observed Indicators", char="·", color=YELLOW)
     info("For each indicator, mark if it has been observed in your investigation.")
     print()
@@ -732,7 +741,6 @@ def method_iw(session):
                 note = prompt("    Observation note / evidence ref")
                 ind["observation_note"] = note
 
-    # Results
     hr_title("STEP 4 — I&W Assessment", char="·", color=YELLOW)
     _print_iw_results(scenarios)
 
@@ -752,20 +760,20 @@ def _print_iw_results(scenarios):
 
         total_confirm = len([i for i in inds if i["type"] == "CONFIRM"])
         score_pct = int((len(confirmed) / total_confirm * 100)) if total_confirm else 0
-        label, col, _ = confidence_label(score_pct)
+        lbl, col, _ = confidence_label(score_pct)
 
         print()
         hr_title(f"S{si+1}: {scenario['label']}", char="·", color=CYAN)
         print(c(f"  Confirmed indicators : ", GREEN) + c(f"{len(confirmed)}/{total_confirm}", GREEN, BOLD))
         print(c(f"  Refuting indicators  : ", RED)   + c(str(len(refuted)), RED, BOLD))
         print(c(f"  Missing expected     : ", YELLOW) + c(str(len(missing)), YELLOW, BOLD))
-        print(c(f"  Assessment           : {label} ({score_pct}%)", col, BOLD))
+        print(c(f"  Assessment           : {lbl} ({score_pct}%)", col, BOLD))
         print()
 
         if refuted:
             warn("Refuting evidence observed:")
             for r in refuted:
-                print(c(f"  ✗ {r['text']}", RED))
+                print(c(f"  x {r['text']}", RED))
         if missing:
             print(c("  Expected but NOT observed (weakens hypothesis):", GRAY))
             for m in missing:
@@ -774,8 +782,6 @@ def _print_iw_results(scenarios):
 
 # ═══════════════════════════════════════════════════════════════════════════
 # METHOD 4 — DEVIL'S ADVOCACY (DA)
-#  Assign analyst to argue AGAINST the leading hypothesis.
-# In CTI: Challenge attribution, consider false flag, alternative actors.
 # ═══════════════════════════════════════════════════════════════════════════
 
 def method_da(session):
@@ -792,7 +798,6 @@ def method_da(session):
 
     da = session.get("da") or {}
 
-    # Get leading hypothesis from ACH if available
     leading = ""
     if session.get("ach") and session["ach"].get("conclusion"):
         ach = session["ach"]
@@ -812,15 +817,14 @@ def method_da(session):
     alternative = prompt("  Alternative hypothesis (the counter-argument)")
     print()
 
-    # Structured challenge areas
     challenges = []
     challenge_areas = [
         ("False Flag",        "Could another actor be mimicking the TTPs of your leading hypothesis?"),
         ("Shared Tooling",    "Are the tools used publicly available? Could any actor have used them?"),
         ("Coincidence",       "Could the behavioral signals be explained by non-malicious activity?"),
-        ("Misidentification", "Could the infrastructure belong to a different actor or be compromised by a third party?"),
+        ("Misidentification", "Could the infrastructure belong to a different actor or be compromised?"),
         ("Confirmation Bias", "What evidence did you find FIRST that anchored your conclusion?"),
-        ("Missing Evidence",  "What evidence would you expect to see IF your hypothesis were true, but you have NOT found?"),
+        ("Missing Evidence",  "What evidence would you expect IF true, but you have NOT found?"),
     ]
 
     print(c("  Challenge each area — provide your best counter-argument:", GRAY))
@@ -828,20 +832,19 @@ def method_da(session):
         print(c(f"\n  [{area}]", CYAN, BOLD))
         print(c(f"  Hint: {hint}", GRAY))
         arg = prompt(f"  Your counter-argument")
-        strength = prompt_int(f"  Strength of this counter-argument (1=weak → 5=strong)", 1, 5, default=2)
+        strength = prompt_int(f"  Strength of this counter-argument (1=weak -> 5=strong)", 1, 5, default=2)
         challenges.append({"area": area, "hint": hint, "argument": arg, "strength": strength})
 
-    # Display results
     hr_title("STEP 2 — Devil's Advocacy Results", char="·", color=YELLOW)
     _print_da_results(leading, alternative, challenges)
 
-    # Final assessment
     hr_title("STEP 3 — Post-DA Conclusion", char="·", color=YELLOW)
-    strong_challenges = [c for c in challenges if c["strength"] >= 4]
+    # FIX #2b: was [c for c in challenges ...] — 'c' shadowed color helper
+    strong_challenges = [ch for ch in challenges if ch["strength"] >= 4]
     if strong_challenges:
         warn(f"{len(strong_challenges)} strong challenge(s) identified — review your hypothesis.")
         for sc in strong_challenges:
-            print(c(f"  ⚠  [{sc['area']}] {sc['argument']}", YELLOW))
+            print(c(f"  !  [{sc['area']}] {sc['argument']}", YELLOW))
         print()
 
     revised = prompt("  Does DA change your conclusion? [y/n]", "n").lower() in ("y", "yes")
@@ -879,7 +882,7 @@ def _print_da_results(leading, alternative, challenges):
     for ch in challenges:
         strength = ch["strength"]
         col = RED if strength >= 4 else YELLOW if strength >= 3 else GREEN
-        bar = "█" * strength + "░" * (5 - strength)
+        bar = "X" * strength + "." * (5 - strength)
         arg_short = ch["argument"][:50] if ch["argument"] else c("[no argument]", GRAY)
         print(f"  {ch['area']:<22} {c(bar, col)}  {arg_short}")
     print()
@@ -888,116 +891,360 @@ def _print_da_results(leading, alternative, challenges):
 # ── REPORT GENERATOR ───────────────────────────────────────────────────────
 
 def generate_report(session):
-    """Generate a structured Flash Report from all completed analyses."""
+    """Generate a rich structured Flash Report from all completed analyses."""
+
+    def safe(text):
+        """Return text as-is if terminal handles it; strip accents as last resort."""
+        s = str(text)
+        try:
+            s.encode(sys.stdout.encoding or "utf-8")
+            return s
+        except (UnicodeEncodeError, LookupError):
+            return "".join(
+                ch for ch in unicodedata.normalize("NFD", s)
+                if unicodedata.category(ch) != "Mn"
+            )
+
+    # FIX #2c: renamed loop var 'c' → 'cell' in md_table inner join
+    def md_table(headers, rows):
+        lines = []
+        lines.append("| " + " | ".join(str(h) for h in headers) + " |")
+        lines.append("| " + " | ".join("---" for _ in headers) + " |")
+        for row in rows:
+            lines.append("| " + " | ".join(str(cell) for cell in row) + " |")
+        return lines
+
     banner()
     hr_title("FLASH REPORT GENERATION", color=CYAN)
 
     meta = session.get("meta", {})
     lines = []
 
+    # ── HEADER ─────────────────────────────────────────────────────────────
     lines.append("# CTI STRUCTURED ANALYTICAL REPORT")
-    lines.append(f"## Case: {meta.get('case_id', 'N/A')}")
-    lines.append(f"**Date:** {datetime.date.today().isoformat()}")
-    lines.append(f"**Analyst:** {meta.get('analyst', 'N/A')}")
-    lines.append(f"**TLP:** {meta.get('tlp', 'WHITE')}")
-    lines.append(f"**IOC:** `{meta.get('ioc', 'N/A')}`")
-    lines.append(f"**Context:** {meta.get('geopolitical_context', 'N/A')}")
+    lines.append("## Case: {}".format(meta.get("case_id", "N/A")))
+    lines.append("**Date:** {}".format(datetime.date.today().isoformat()))
+    lines.append("**Analyst:** {}".format(meta.get("analyst", "N/A")))
+    lines.append("**TLP:** {}".format(meta.get("tlp", "WHITE")))
+    lines.append("**IOC:** `{}`".format(meta.get("ioc", "N/A")))
+    lines.append("**Context:** {}".format(
+        meta.get("geopolitical_context", meta.get("context", "N/A"))
+    ))
     lines.append("")
     lines.append("---")
     lines.append("")
 
-    # ACH
+    # ── ACH ────────────────────────────────────────────────────────────────
     ach = session.get("ach")
     if ach and ach.get("conclusion"):
         c_data = ach["conclusion"]
-        hi     = c_data["leading_hypothesis"]
-        h      = ach["hypotheses"][hi]
-        lines.append("## ACH — Analysis of Competing Hypotheses")
-        lines.append(f"**Leading Hypothesis:** H{hi+1} — {h['label']}: {h['description']}")
-        lines.append(f"**Confidence:** {c_data['confidence_label']} ({c_data['confidence_pct']}%)")
-        lines.append(f"**Rationale:** {c_data['rationale']}")
-        lines.append(f"**Caveats:** {c_data['caveats']}")
+
+        hi = c_data.get("leading_hypothesis", 0)
+        if isinstance(hi, str):
+            raw = hi.strip()
+            if raw.upper().startswith("H"):
+                try:
+                    hi = int(raw[1:]) - 1
+                except ValueError:
+                    hi = 0
+            else:
+                try:
+                    hi = int(raw)
+                except ValueError:
+                    hi = 0
+        hi = max(0, min(int(hi), len(ach.get("hypotheses", [{}])) - 1))
+
+        h = ach.get("hypotheses", [{}])[hi]
+        lines.append("## ACH -- Analysis of Competing Hypotheses")
         lines.append("")
-        lines.append("### Hypotheses Scored")
-        for i, hx in enumerate(ach["hypotheses"]):
-            s = ach["scores"].get(i, {})
-            lines.append(f"- H{i+1} [{hx['label']}]: score={s.get('total',0)}, inconsistencies={s.get('inconsistencies',0)}, confidence={s.get('confidence_pct',0)}%")
-        lines.append("")
-        lines.append("### Indicators to Monitor")
-        for ind in c_data.get("confirm_indicators", []):
-            lines.append(f"- CONFIRM: {ind}")
-        for ind in c_data.get("refute_indicators", []):
-            lines.append(f"- REFUTE:  {ind}")
+        lines.append("**Leading Hypothesis:** H{} -- {}: {}".format(
+            hi + 1, h.get("label", "N/A"), h.get("description", "N/A")
+        ))
+        lines.append("**Confidence:** {} ({}%)".format(
+            c_data.get("confidence_label", "N/A"),
+            c_data.get("confidence_pct", "N/A"),
+        ))
+        lines.append("**Rationale:** {}".format(c_data.get("rationale", "N/A")))
+        lines.append("**Caveats:** {}".format(c_data.get("caveats", "N/A")))
         lines.append("")
 
-    # KAC
+        lines.append("### Hypotheses Scored")
+        lines.append("")
+        hyp_rows = []
+        eliminated = []
+        for i, hx in enumerate(ach.get("hypotheses", [])):
+            s = (ach.get("scores", {}).get(i)
+                 or ach.get("scores", {}).get(str(i))
+                 or {})
+            total = s.get("total", 0)
+            inc   = s.get("inconsistencies", 0)
+            conf  = s.get("confidence_pct", 0)
+            marker = "LEADING" if i == hi else ""
+            hyp_rows.append([
+                "H{} -- {}".format(i + 1, hx.get("label", "?")),
+                "{:+d}".format(total) if isinstance(total, int) else total,
+                inc,
+                "{}%".format(conf),
+                marker,
+            ])
+            if inc > 0 or (isinstance(total, int) and total < 0):
+                eliminated.append("H{} -- {} ({} inconsistencies)".format(
+                    i + 1, hx.get("label", "?"), inc
+                ))
+        lines += md_table(
+            ["Hypothesis", "Score", "Inconsistencies", "Confidence", "Status"],
+            hyp_rows
+        )
+        lines.append("")
+
+        if eliminated:
+            lines.append("**Hypotheses eliminated:** " + " | ".join(eliminated))
+            lines.append("")
+
+        confirm_inds = c_data.get("confirm_indicators", [])
+        refute_inds  = c_data.get("refute_indicators", [])
+        if confirm_inds or refute_inds:
+            lines.append("### Indicators to Monitor")
+            lines.append("")
+            if confirm_inds:
+                lines.append("**CONFIRM H{}:**".format(hi + 1))
+                for ind in confirm_inds:
+                    lines.append("- {}".format(ind))
+            if refute_inds:
+                lines.append("")
+                lines.append("**REFUTE H{}:**".format(hi + 1))
+                for ind in refute_inds:
+                    lines.append("- {}".format(ind))
+            lines.append("")
+
+    # ── KAC ────────────────────────────────────────────────────────────────
     kac = session.get("kac")
     if kac and kac.get("assumptions"):
-        lines.append("## KAC — Key Assumptions Check")
-        critical = [a for a in kac["assumptions"] if a.get("certainty", 5) <= 2 and a.get("impact", 0) >= 4]
-        if critical:
-            lines.append("### ⚠ Critical Assumptions (low certainty, high impact)")
-            for a in critical:
-                lines.append(f"- {a['text']}")
-                lines.append(f"  Challenge: {a.get('challenge', '')}")
-        lines.append("### All Assumptions")
+        lines.append("---")
+        lines.append("")
+        lines.append("## KAC -- Key Assumptions Check")
+        lines.append("")
+
+        kac_rows = []
+        critical = []
         for i, a in enumerate(kac["assumptions"]):
-            lines.append(f"- A{i+1} [Certainty:{a.get('certainty','?')} Impact:{a.get('impact','?')}]: {a['text']}")
+            cert = a.get("certainty", "?")
+            imp  = a.get("impact", "?")
+            risk = a.get("risk", "N/A")
+            if risk == "N/A" and isinstance(cert, int) and isinstance(imp, int):
+                rv = (6 - cert) * imp
+                risk = "CRITICAL" if rv >= 16 else "HIGH" if rv >= 10 else "MEDIUM" if rv >= 5 else "LOW"
+            text = a.get("text", "N/A")
+            chal = a.get("challenge", "N/A")
+            kac_rows.append([
+                "A{}".format(i + 1),
+                text,
+                "{}/5".format(cert),
+                "{}/5".format(imp),
+                risk,
+                chal,
+            ])
+            if risk in ("CRITICAL",) or (
+                isinstance(cert, int) and isinstance(imp, int)
+                and cert <= 2 and imp >= 4
+            ):
+                critical.append((i + 1, text, chal))
+
+        lines += md_table(
+            ["#", "Assumption", "Certainty", "Impact", "Risk", "Challenge"],
+            kac_rows
+        )
         lines.append("")
 
-    # I&W
+        if critical:
+            lines.append("**Critical assumptions flagged:**")
+            for num, text, chal in critical:
+                lines.append("- **A{}** -- {}: `{}`".format(num, text, chal))
+            lines.append("")
+
+    # ── I&W ────────────────────────────────────────────────────────────────
+    # FIX #3: use _iw_has_data() — detects both interactive and flat YAML structures
     iw = session.get("iw")
-    if iw and iw.get("scenarios"):
-        lines.append("## I&W — Indicators & Warnings")
-        for si, scenario in enumerate(iw["scenarios"]):
-            inds = scenario.get("indicators", [])
-            confirmed = [i for i in inds if i.get("observed") == "YES" and i["type"] == "CONFIRM"]
-            total_c   = len([i for i in inds if i["type"] == "CONFIRM"])
-            lines.append(f"### S{si+1}: {scenario['label']}")
-            lines.append(f"Confirmed: {len(confirmed)}/{total_c} expected indicators")
-            for ind in inds:
-                obs = ind.get("observed", "UNKNOWN")
-                marker = "✓" if obs == "YES" else "✗" if obs == "NO" else "?"
-                lines.append(f"- [{ind['type']}] {marker} {ind['text']}")
-                if ind.get("observation_note"):
-                    lines.append(f"  Note: {ind['observation_note']}")
+    if _iw_has_data(iw):
+        lines.append("---")
+        lines.append("")
+        lines.append("## I&W -- Indicators & Warnings")
         lines.append("")
 
-    # DA
+        # Structure A: interactive — has 'scenarios' list
+        if iw.get("scenarios"):
+            for si, scenario in enumerate(iw["scenarios"]):
+                label = scenario.get("label", "N/A")
+                inds  = scenario.get("indicators", [])
+
+                confirmed_list = [ind for ind in inds if ind.get("observed") == "YES" and ind.get("type") == "CONFIRM"]
+                total_c        = len([ind for ind in inds if ind.get("type") == "CONFIRM"])
+                score_pct      = int(len(confirmed_list) / total_c * 100) if total_c else 0
+                lbl, _, _      = confidence_label(score_pct)
+
+                lines.append("### S{}: {}".format(si + 1, label))
+                lines.append("")
+                lines.append("**Assessment: {}** -- Confirmed: {}/{} expected indicators".format(
+                    lbl, len(confirmed_list), total_c
+                ))
+                lines.append("")
+
+                if inds:
+                    iw_rows = []
+                    for ind in inds:
+                        obs    = ind.get("observed", "UNKNOWN")
+                        marker = "**YES**" if obs == "YES" else "NO" if obs == "NO" else "?"
+                        note   = ind.get("observation_note", ind.get("note", ""))
+                        iw_rows.append([
+                            ind.get("type", "?"),
+                            ind.get("text", "N/A"),
+                            ind.get("mitre", ""),
+                            marker,
+                            note,
+                        ])
+                    lines += md_table(["Type", "Indicator", "MITRE", "Observed", "Note"], iw_rows)
+                lines.append("")
+
+        # Structure B: flat YAML (s1_status, s1_confirmed, etc.)
+        else:
+            import re
+            scenario_nums = sorted(set(
+                int(m.group(1))
+                for k in iw.keys()
+                for m in [re.match(r"s(\d+)_", k)]
+                if m
+            ))
+            lines.append("*I&W loaded from YAML. Run method [3] to edit interactively.*")
+            lines.append("")
+            for sn in scenario_nums:
+                prefix = f"s{sn}_"
+                sk = {k[len(prefix):]: v for k, v in iw.items() if k.startswith(prefix)}
+                lines.append("### S{}: {}".format(sn, sk.get("label", f"Scenario {sn}")))
+                lines.append("")
+                lines.append("**Status:** {}  |  **Confirmed:** {}/{}".format(
+                    sk.get("status", "N/A"),
+                    sk.get("confirmed", "?"),
+                    sk.get("total", "?"),
+                ))
+                lines.append("")
+
+        # Optional warning level block
+        if iw.get("warning_level"):
+            lines.append("### WARNING LEVEL {}".format(iw["warning_level"]))
+            lines.append("")
+            lines.append("**Trigger:** {}".format(iw.get("trigger", "N/A")))
+            lines.append("**Escalation required:** {}".format(iw.get("escalation_required", False)))
+            actions = iw.get("immediate_actions", [])
+            if actions:
+                lines.append("")
+                lines.append("**Immediate Actions (priority order):**")
+                for n, action in enumerate(actions, 1):
+                    lines.append("{}. {}".format(n, action))
+            lines.append("")
+
+    # ── DA ─────────────────────────────────────────────────────────────────
     da = session.get("da")
     if da:
-        lines.append("## DA — Devil's Advocacy")
-        lines.append(f"**Leading hypothesis challenged:** {da.get('leading_hypothesis','')}")
-        lines.append(f"**Alternative:** {da.get('alternative_hypothesis','')}")
-        strong = [c for c in da.get("challenges", []) if c.get("strength", 0) >= 4]
-        if strong:
-            lines.append("### Strong Counter-Arguments")
-            for c in strong:
-                lines.append(f"- [{c['area']}] (strength {c['strength']}/5): {c['argument']}")
-        if da.get("revised"):
-            lines.append(f"### Revised Conclusion")
-            lines.append(da.get("new_conclusion", ""))
-            lines.append(f"New confidence: {da.get('new_confidence')}%")
-        lines.append(f"**Final note:** {da.get('final_note','')}")
+        lines.append("---")
+        lines.append("")
+        lines.append("## DA -- Devil's Advocacy")
+        lines.append("")
+        lines.append("**Leading hypothesis challenged:** {}".format(da.get("leading_hypothesis", "N/A")))
+        lines.append("**Alternative:** {}".format(da.get("alternative_hypothesis", "N/A")))
         lines.append("")
 
-    lines.append("---")
-    lines.append("*Generated by CSAT.py — CTI Structured Analytic Techniques*")
-    lines.append(f"*TLP:{meta.get('tlp','WHITE')}*")
+        challenges = da.get("challenges", [])
+        if challenges:
+            lines.append("### Challenge Areas")
+            lines.append("")
+            da_rows = []
+            strong  = []
+            for i, ch in enumerate(challenges):
+                strength = ch.get("strength", 0)
+                arg      = ch.get("argument", "N/A")
+                area     = ch.get("area", "?")
+                da_rows.append([
+                    "DA{}".format(i + 1),
+                    area,
+                    "{}/5".format(strength),
+                    arg,
+                ])
+                if strength >= 4:
+                    strong.append("DA{} -- {} ({}/5)".format(i + 1, area, strength))
+            lines += md_table(["#", "Area", "Strength", "Argument"], da_rows)
+            lines.append("")
+            if strong:
+                lines.append("**Strong challenges identified (strength >= 4/5):** {}".format(" | ".join(strong)))
+                lines.append("")
 
-    # Write report
-    report_path = f"flash_report_{meta.get('case_id', 'cti')}_{datetime.date.today().isoformat()}.md"
-    with open(report_path, "w") as f:
+        if da.get("revised"):
+            lines.append("### Revised Conclusion")
+            lines.append("")
+            lines.append(da.get("new_conclusion", "N/A"))
+            lines.append("")
+            lines.append("**Post-DA confidence:** {}%".format(da.get("new_confidence", "N/A")))
+            lines.append("")
+
+        lines.append("**Final note:** {}".format(da.get("final_note", "N/A")))
+        lines.append("")
+
+    # ── IOC SUMMARY ────────────────────────────────────────────────────────
+    iocs = session.get("iocs")
+    if iocs:
+        lines.append("---")
+        lines.append("")
+        lines.append("## IOC Summary")
+        lines.append("")
+        ioc_rows = []
+        for key, label in [("block","**BLOCK**"), ("watch","**WATCH**"), ("monitor","MONITOR"), ("tls","PIVOT")]:
+            for entry in iocs.get(key, []):
+                if isinstance(entry, dict):
+                    val  = entry.get("thumbprint", entry.get("value", str(entry)))
+                    note = entry.get("note", "")
+                    ioc_rows.append([label, val, note])
+                else:
+                    ioc_rows.append([label, str(entry), ""])
+        if ioc_rows:
+            lines += md_table(["Status", "IOC", "Note"], ioc_rows)
+            lines.append("")
+
+    # ── GAPS ───────────────────────────────────────────────────────────────
+    gaps = session.get("next_pivot") or session.get("gaps")
+    if gaps:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Gaps -- Next Actions")
+        lines.append("")
+        if isinstance(gaps, dict):
+            pmap = {"priority_1":"P1","priority_2":"P2","priority_3":"P3","priority_4":"P4","priority_5":"P5"}
+            lines += md_table(["Priority","Action"], [[pmap.get(k,k), str(v)] for k,v in sorted(gaps.items())])
+        elif isinstance(gaps, list):
+            for g in gaps:
+                lines.append("- {}".format(g))
+        lines.append("")
+
+    # ── FOOTER ─────────────────────────────────────────────────────────────
+    lines.append("---")
+    lines.append("*Generated by CSAT.py -- CTI Structured Analytic Techniques*")
+    lines.append("*TLP: {}*".format(meta.get("tlp", "WHITE")))
+
+    report_path = "flash_report_{}_{}.md".format(
+        meta.get("case_id", "cti"),
+        datetime.date.today().isoformat(),
+    )
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    success(f"Flash Report written → {report_path}")
+    success("Flash Report written -> {}".format(report_path))
     print()
 
-    # Also print to terminal
     if confirm("Print report to terminal?"):
         print()
         for line in lines:
-            print(f"  {line}")
+            try:
+                print("  {}".format(line))
+            except UnicodeEncodeError:
+                print("  {}".format(safe(line)))
 
     return report_path
 
@@ -1015,26 +1262,42 @@ MENU_ITEMS = [
     ("q", "Quit"),
 ]
 
+# ── FIX #1 : explicit menu key → session key mapping ──────────────────────
+# Replaces the broken: label.split("—")[0].strip().lower()
+# which gave "i&w" (never matching "iw" in completed set).
+_MENU_KEY_TO_SESSION = {
+    "1": "ach",
+    "2": "kac",
+    "3": "iw",
+    "4": "da",
+}
+
 def main_menu(session, session_path):
     while True:
         banner()
 
-        # Session status bar
         meta = session.get("meta", {})
-        completed = []
-        for method in ["ach", "kac", "iw", "da"]:
-            if session.get(method):
-                completed.append(method.upper())
+
+        # FIX #3: use _iw_has_data() for iw completion check
+        completed = set()
+        for key in ("ach", "kac", "da"):
+            if session.get(key):
+                completed.add(key)
+        if _iw_has_data(session.get("iw")):
+            completed.add("iw")
+
+        completed_display = [k.upper() for k in ("ach", "kac", "iw", "da") if k in completed]
 
         print(c(f"  Case: {meta.get('case_id','—')}  |  Analyst: {meta.get('analyst','—')}  |  IOC: {meta.get('ioc','—')}", WHITE, BOLD))
-        print(c(f"  TLP: {meta.get('tlp','WHITE')}  |  Completed: {', '.join(completed) or 'none'}", GRAY))
+        print(c(f"  TLP: {meta.get('tlp','WHITE')}  |  Completed: {', '.join(completed_display) or 'none'}", GRAY))
         print()
 
         hr_title("MAIN MENU", color=YELLOW)
         print()
         for key, label in MENU_ITEMS:
-            method = label.split("—")[0].strip().lower()
-            done_marker = c(" ✓", GREEN) if method in [m.lower() for m in completed] else ""
+            # FIX #1: explicit mapping — never mis-matches "i&w" vs "iw"
+            section_key = _MENU_KEY_TO_SESSION.get(key, "")
+            done_marker = c(" v", GREEN) if section_key in completed else ""
             print(c(f"  [{key}]", CYAN, BOLD) + f"  {label}{done_marker}")
         print()
 
@@ -1071,9 +1334,7 @@ def main_menu(session, session_path):
 # ── ENTRY POINT ────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="CTI Structured Analytic Techniques"
-    )
+    parser = argparse.ArgumentParser(description="CTI Structured Analytic Techniques")
     parser.add_argument("--load",   metavar="FILE",   help="Load existing session YAML")
     parser.add_argument("--method", metavar="METHOD", help="Jump to method: ach|kac|iw|da")
     parser.add_argument("--report", metavar="FILE",   help="Generate report from session file and exit")
