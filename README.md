@@ -1,123 +1,128 @@
-# CSAT — CTI-Structured Analytic Techniques for CTI
+# CSAT: CTI Structured Analytic Techniques
 
-A command-line tool implementing structured analytic techniques for cyber threat intelligence analysis. Designed for analysts who need to document and challenge their reasoning on IOC investigations, attribution assessments, and campaign analysis.
+A local, graphical tool to run structured analytic techniques on cyber threat intelligence cases: IOC investigations, attribution assessments, campaign analysis. It guides you through four techniques, scores your reasoning live and produces a Flash Report ready for MISP or a ticket.
 
----
-
-## Rationale
-
-CTI analysis fails in predictable ways: confirmation bias anchors conclusions to the first plausible hypothesis, high-confidence language obscures weak evidence chains, and attribution often rests on a single behavioral signal rather than converging independent indicators. These are not skill gaps — they are cognitive patterns that affect experienced analysts as much as junior ones.
-
-Structured analytic techniques address this by forcing explicit separation between evidence collection, hypothesis generation, and scoring. The analyst documents assumptions, scores evidence against competing hypotheses, and builds a counter-case against their own conclusion before finalising. The output is an auditable reasoning chain, not just a verdict.
-
-This tool implements four techniques as a guided CLI workflow. Sessions persist as YAML files and can be shared, version-controlled, or attached to MISP events as analytical notes.
+![ACH matrix](docs/ach.png)
 
 ---
 
-## Methods
-
-### ACH — Analysis of Competing Hypotheses
-
-The analyst defines all plausible hypotheses before examining evidence. Each evidence item is scored against each hypothesis on a five-point consistency scale (CC / C / N / I / II). The leading hypothesis is the one with the fewest inconsistencies, not the most confirming evidence — a distinction that matters when evidence is ambiguous or potentially fabricated.
-
-The tool runs a sensitivity analysis automatically: if removing a single evidence item changes the ranking, the conclusion is flagged as fragile. Diagnostic evidence (items that differentiate between hypotheses) is identified separately from evidence that is consistent with all hypotheses and therefore has no analytical value.
-
-### KAC — Key Assumptions Check
-
-Every CTI assessment rests on assumptions that are rarely made explicit: that an IP address is under adversary control rather than legitimately misconfigured, that a campaign observed in historical data is still active, that infrastructure ownership inferred from passive DNS is accurate. The KAC forces the analyst to list these assumptions and rate them on two axes — certainty and impact if wrong. Assumptions with low certainty and high impact are flagged as critical and become the primary targets for additional collection.
-
-### I&W — Indicators and Warnings
-
-For each threat scenario under consideration, the analyst defines observable indicators in advance: what would confirm the scenario is active, what would refute it, and what requires further analysis. Each indicator is mapped to a MITRE ATT&CK technique and a data source. The analyst then marks which indicators have been observed. The absence of expected indicators is treated as evidence, not as absence of evidence.
-
-This technique is particularly useful for building persistent monitoring queries: the confirm indicators for a given actor translate directly into Shodan, Censys, and SIEM searches.
-
-### DA — Devil's Advocacy
-
-The analyst argues as forcefully as possible against their leading hypothesis. Six challenge areas are structured into the workflow: false flag, shared tooling, coincidence, misidentification, confirmation bias, and missing evidence. Each counter-argument is rated for strength. Counter-arguments rated 4/5 or higher are surfaced in the final report as unresolved challenges.
-
-In APT attribution specifically, this technique surfaces the most common analytical error: treating TTP compatibility as attribution. State actors deliberately replicate the TTPs of other groups. A conclusion that does not survive a structured counter-case should not be disseminated.
-
----
-
-## Usage
+## Quick start
 
 ```bash
-# Start a new session
-python CSAT.py
-
-# Resume an existing session
-python CSAT.py --load session.yaml
-
-# Jump directly to a method
-python CSAT.py --method ach
-python CSAT.py --method kac
-python CSAT.py --method iw
-python CSAT.py --method da
-
-# Generate a Flash Report from a saved session without entering interactive mode
-python CSAT.py --report session.yaml
+pip install pyyaml                 # Arch: sudo pacman -S python-yaml
+python csat.py                     # opens the interface in your browser
+python csat.py my_case.yaml        # open an existing session
 ```
 
-Sessions are saved as YAML. The `--report` flag generates a structured Markdown report covering all completed analyses, suitable for attachment to MISP events or inclusion in a wider intelligence product.
+No account or configuration needed. The tool runs a small local server on `127.0.0.1`, stop it with `Ctrl+C`. Sessions are plain YAML files in the folder you launched from, **autosaved** after the first save.
+
+Requirements: Python 3.8+ and PyYAML.
 
 ---
 
-## Requirements
+## Workflow
 
-```
-Python 3.8+
-pyyaml
-```
+| Step | Technique | What you do | What the tool shows |
+|---|---|---|---|
+| 0 | **Case** | IOC, context, TLP | - |
+| 1 | **ACH**: Analysis of Competing Hypotheses | List hypotheses and evidence, click cells to score (CC / C / N / I / II) | Ranking, diagnostic evidence, fragile evidence, untested hypotheses |
+| 2 | **KAC**: Key Assumptions Check | Write assumptions, slide certainty and impact | Risk matrix, critical assumptions → collection priorities |
+| 3 | **I&W**: Indicators & Warnings | Define confirm / refute / monitor indicators, tick what you observed | Gauge and status per scenario |
+| 4 | **DA**: Devil's Advocacy | Argue against your conclusion on six fronts, rate each argument | Pressure radar, verdict |
+| ★ | **Report** | - | Bottom line with every open warning, Markdown / YAML export, print to PDF |
 
-On Arch Linux:
+Each step has a collapsible guide explaining the method in plain words.
+
+![Key assumptions](docs/kac.png)
+![Devil's advocacy](docs/da.png)
+![Report](docs/report.png)
+
+---
+
+## How scoring works
+
+### ACH
+
+Following Heuer, the leading hypothesis is the one with the **least evidence against it**, not the most evidence for it.
+
+- Each inconsistent cell counts against the hypothesis: `I` = 1, `II` = 2.
+- It is weighted by source reliability: **A** 1.0 · **B** 0.8 · **C** 0.6 · **D** 0.4. A single unconfirmed report cannot eliminate a hypothesis on its own.
+- Ties are broken by weighted net consistency.
+- A hypothesis scored only `N` is flagged **untested** and cannot lead: it has nothing against it only because it was never tested.
+- **Sensitivity:** each evidence item is removed in turn. If the leader changes, the conclusion is **fragile** and the item is highlighted.
+- **Diagnosticity:** an item scored the same for every hypothesis has no analytical value and is flagged.
+
+The matrix gives a leader; **you** pick the conclusion and the confidence. If they differ, the report asks for a justification.
+
+### Confidence levels
+
+| Label | Range | Meaning |
+|---|---|---|
+| HIGH | 75–100 | Strong evidence base. Attribution supportable with documented caveats. |
+| MEDIUM | 50–74 | Reasonable basis. Additional collection required before dissemination. |
+| LOW | 25–49 | Working hypothesis. Not suitable for dissemination. |
+| MINIMAL | 0–24 | Insufficient evidence. Analytical speculation only. |
+
+### KAC
+Risk = (6 − certainty) × impact. Certainty ≤ 2 **and** impact ≥ 4 is **critical**: its challenge becomes your next collection task.
+
+### I&W
+Assessment = observed confirm indicators / defined confirm indicators. Any observed **refute** indicator marks the scenario **REFUTED**. Confirm indicators marked *No* are counted as *expected but absent*.
+
+### DA
+Counter-arguments rated 4–5 are reported as unresolved. Three or more strong arguments (or an average ≥ 4 over at least three areas) means **the conclusion does not hold**.
+
+---
+
+## Command line
+
 ```bash
-sudo pacman -S python-yaml
+python csat.py                          # graphical interface (default)
+python csat.py case.yaml                # open a session in the interface
+python csat.py --port 9000 --no-browser # custom port, don't open the browser
+python csat.py --cli                    # interactive terminal mode
+python csat.py --cli --load case.yaml --method ach
+python csat.py --report case.yaml       # write the Markdown Flash Report and exit
+python csat.py --report case.yaml --html
 ```
 
-Or in a virtual environment:
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install pyyaml
-```
+The terminal mode uses the same scoring and the same session files as the interface.
 
 ---
 
-## Output
+## Files
 
-Each session produces two files:
+| File | Role |
+|---|---|
+| `csat.py` | Entry point |
+| `csat_core.py` | Session model, scoring, report generation (no I/O) |
+| `csat_gui.py` | Local web server (standard library only) |
+| `web/` | Interface (HTML / CSS / vanilla JS, no CDN, works offline) |
+| `csat_cli.py` | Terminal mode |
+| `tests/` | `python -m unittest discover -s tests` |
+| `cti-unc3386-2026.yaml` | Example session from a real exercise (UNC3886, March 2026), its report is in `examples/` |
 
-- `session_<case_id>.yaml` — full session state including all hypotheses, evidence, matrix scores, assumptions, indicators, and DA challenges. Can be reloaded and continued.
-- `flash_report_<case_id>_<date>.md` — structured analytical report covering ACH conclusion with confidence level, critical assumptions from KAC, I&W scenario assessments, and DA counter-arguments. Formatted for TLP-tagged dissemination.
+The YAML format is human-readable and stays compatible with sessions created by earlier versions (TLP:WHITE is read as TLP:CLEAR). Sessions can be versioned next to your investigation notes to keep an auditable trail of how a conclusion evolved.
 
 ---
 
-## Confidence Levels
+## Security
 
-| Label   | Range  | Interpretation |
-|---------|--------|----------------|
-| HIGH    | 75-100 | Strong evidence base. Attribution supportable with documented caveats. |
-| MEDIUM  | 50-74  | Reasonable basis. Additional collection required before dissemination. |
-| LOW     | 25-49  | Working hypothesis. Not suitable for dissemination. |
-| MINIMAL | 0-24   | Insufficient evidence. Analytical speculation only. |
+The server only listens on `127.0.0.1`, rejects requests whose `Host` or `Origin` is not local (DNS-rebinding protection), and only reads or writes `.yaml` files in the session folder.
 
 ---
 
 ## Notes
 
-The tool does not make analytical judgements. It structures the process and surfaces the weak points in an existing analysis. The quality of the output depends entirely on the quality of the evidence and hypotheses the analyst brings to it.
-
-Sessions can be committed to version control alongside investigation notes, providing an auditable record of how a conclusion evolved over time and what evidence was available at each stage.
-
-The YAML session format is intentionally simple and human-readable. Fields can be edited directly if the interactive workflow is not suitable for a given use case.
-
----
+The tool does not make analytical judgements. It structures the process and surfaces the weak points of an analysis. The quality of the output depends on the quality of the evidence and hypotheses the analyst brings to it.
 
 ## References
 
-Richards J. Heuer Jr., *Psychology of Intelligence Analysis*, Center for the Study of Intelligence, CIA, 1999. Available in the public domain.
+- Richards J. Heuer Jr., *Psychology of Intelligence Analysis*, CIA Center for the Study of Intelligence, 1999.
+- Pherson, R.H. and Heuer, R.J., *Structured Analytic Techniques for Intelligence Analysis*, CQ Press, 2021.
+- MITRE ATT&CK: https://attack.mitre.org
+- FIRST TLP 2.0: https://www.first.org/tlp/
 
-Pherson, R.H. and Heuer, R.J., *Structured Analytic Techniques for Intelligence Analysis*, CQ Press, 2021.
+## License
 
-MITRE ATT&CK Framework: https://attack.mitre.org
+Apache License 2.0, see [LICENSE](LICENSE). Copyright 2026 dandelion (0xLhu).

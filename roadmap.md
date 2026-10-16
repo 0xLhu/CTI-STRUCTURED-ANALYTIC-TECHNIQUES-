@@ -1,19 +1,25 @@
 # Roadmap
 
-This roadmap is derived from a real investigation conducted during the UNC3886 exercise (March 2026) using free tools only — Shodan, Censys, VirusTotal. Every item listed here addresses a concrete friction point encountered during that exercise, not a hypothetical feature request.
+This roadmap is derived from a real investigation conducted during the UNC3886 exercise (March 2026) using free tools only: Shodan, Censys, VirusTotal. Every item listed here addresses a concrete friction point encountered during that exercise, not a hypothetical feature request.
 
 ---
 
 ## Current State
 
-`CSAT.py` implements four structured analytic techniques as an interactive CLI:
+`csat.py` implements four structured analytic techniques in a local graphical interface (browser), with an equivalent terminal mode:
 
-- ACH — Analysis of Competing Hypotheses
-- KAC — Key Assumptions Check
-- I&W — Indicators and Warnings
-- DA — Devil's Advocacy
+- ACH: Analysis of Competing Hypotheses
+- KAC: Key Assumptions Check
+- I&W: Indicators and Warnings
+- DA: Devil's Advocacy
 
-Sessions persist as YAML files. Output is a structured Markdown Flash Report.
+Sessions persist as YAML files (autosaved). Output is a structured Flash Report (Markdown, HTML / PDF).
+
+Done in v2:
+  [x] Graphical interface: live ACH matrix, KAC risk matrix, I&W gauges, DA radar, dashboard
+  [x] ACH scoring aligned with Heuer (least inconsistency wins), reliability weighting, untested hypotheses flagged
+  [x] Sensitivity analysis fixed (evidence re-indexing bug)
+  [x] TLP 2.0 labels
 
 ---
 
@@ -24,7 +30,7 @@ During the UNC3886 investigation, several friction points slowed the analytical 
 - Evidence items (headers, certificates, firmware versions) had to be typed manually into the ACH matrix, even though they already existed as Shodan/Censys/VT output
 - Findings produced in CSAT had to be imported manually into MISP with no link between the YAML session and the MISP event
 - I&W confirm indicators were defined but not translated into executable hunting queries
-- No link between sessions — starting a new investigation on the same actor six months later requires rebuilding context from scratch
+- No link between sessions: starting a new investigation on the same actor six months later requires rebuilding context from scratch
 - The Flash Report is Markdown only, with no structured export format for sharing or ticketing systems
 
 ---
@@ -35,7 +41,7 @@ Items are ordered by analytical value, not implementation effort.
 
 ---
 
-### Priority 1 — Reduce Input Friction
+### Priority 1: Reduce Input Friction
 
 #### Evidence import from CSV / JSON
 
@@ -50,7 +56,7 @@ evidence.csv
 ```
 
 ```bash
-python CSAT.py --method ach --evidence evidence.csv
+python csat.py --method ach --evidence evidence.csv
 ```
 
 ---
@@ -60,18 +66,18 @@ python CSAT.py --method ach --evidence evidence.csv
 Maintain a local index file (`~/.csat/index.yaml`) referencing all past sessions with their key metadata: case ID, IOC, actor hypotheses, conclusion, confidence level, date.
 
 ```bash
-python CSAT.py --search UNC3886
+python csat.py --search UNC3886
 # cti-unc3386-2026.yaml  2026-03-07  IOC: 103.254.253.210  MEDIUM
 # cti-unc3886-2025.yaml  2025-11-14  IOC: 45.77.23.11       LOW
 
-python CSAT.py --search 103.254.253.210
+python csat.py --search 103.254.253.210
 ```
 
 Gives the tool cumulative memory without requiring an external backend.
 
 ---
 
-### Priority 2 — MISP Integration
+### Priority 2: MISP Integration
 
 #### Export session as MISP event
 
@@ -85,7 +91,7 @@ The file would contain:
 - Critical KAC assumptions as tags or comments
 
 ```bash
-python CSAT.py --export-misp session.yaml > misp_event.json
+python csat.py --export-misp session.yaml > misp_event.json
 ```
 
 ---
@@ -95,14 +101,14 @@ python CSAT.py --export-misp session.yaml > misp_event.json
 Before opening a new session, query the local MISP instance to check whether the IOC is already known, in which event, and at what confidence level. Enforces the "MISP first" methodology at the tooling level rather than relying on procedural discipline.
 
 ```bash
-python CSAT.py --misp-check 103.254.253.210
+python csat.py --misp-check 103.254.253.210
 ```
 
 Requires a MISP API key configured in a local config file.
 
 ---
 
-### Priority 3 — Generate Hunting Queries from I&W
+### Priority 3: Generate Hunting Queries from I&W
 
 #### Export pivot queries from I&W indicators
 
@@ -121,12 +127,12 @@ Base mapping:
 Output: `hunting_queries_<case_id>.txt` with all queries ready to copy, annotated by scenario and priority.
 
 ```bash
-python CSAT.py --export-queries session.yaml
+python csat.py --export-queries session.yaml
 ```
 
 ---
 
-### Priority 4 — Session Memory and Continuity
+### Priority 4: Session Memory and Continuity
 
 #### Link between sessions
 
@@ -135,18 +141,18 @@ When opening a new session, allow referencing an existing session as context. Hy
 Useful for: resuming an investigation months later, investigating a new IOC from the same cluster, onboarding an analyst on an active case.
 
 ```bash
-python CSAT.py --context previous_session.yaml
+python csat.py --context previous_session.yaml
 ```
 
 ---
 
-### Priority 5 — Separate Tools
+### Priority 5: Separate Tools
 
 These items belong in standalone scripts rather than as CSAT extensions.
 
 ---
 
-#### `fetch.py` — IOC Context Fetcher
+#### `fetch.py`: IOC Context Fetcher
 
 A standalone script that queries Shodan, Censys, and VirusTotal for a given IOC and produces a structured JSON file usable as CSAT input.
 
@@ -163,7 +169,7 @@ Reduces the collection phase of an investigation from hours to minutes. The anal
 
 ---
 
-#### `diff.py` — Session Diff
+#### `diff.py`: Session Diff
 
 Compare two sessions on the same actor or IOC. Identify what changed: new hypotheses added, evidence updated, confidence revised, assumptions invalidated.
 
@@ -178,12 +184,12 @@ python diff.py session_2025.yaml session_2026.yaml
 #### TLP-aware Report Renderer
 
 Take a completed session and produce filtered report versions by TLP level:
-- TLP:RED — full report for internal team
-- TLP:AMBER — without sensitive source references, for partners
-- TLP:GREEN — without specific IOCs, for broad dissemination
+- TLP:RED, full report for internal team
+- TLP:AMBER, without sensitive source references, for partners
+- TLP:GREEN, without specific IOCs, for broad dissemination
 
 ```bash
-python CSAT.py --report session.yaml --tlp AMBER
+python csat.py --report session.yaml --tlp AMBER
 ```
 
 ---
@@ -200,7 +206,7 @@ Sprint 2  (2-3 days)
   [ ] MISP lookup before session
 
 Sprint 3  (3-5 days)
-  [ ] fetch.py — IOC Context Fetcher
+  [ ] fetch.py: IOC Context Fetcher
   [ ] Hunting query export from I&W indicators
 
 Sprint 4  (1-2 days)
@@ -213,11 +219,9 @@ Sprint 4  (1-2 days)
 
 ## Out of Scope
 
-**Graphical interface** — the value of CSAT is in the rigour of the process, not the ergonomics. A GUI risks creating the impression that filling in fields is sufficient. The CLI enforces intentional input.
+**AI-assisted hypothesis generation**: the analytical value comes from the analyst formulating hypotheses and scoring evidence themselves. Delegating this step removes the primary benefit of the method.
 
-**AI-assisted hypothesis generation** — the analytical value comes from the analyst formulating hypotheses and scoring evidence themselves. Delegating this step removes the primary benefit of the method.
-
-**Direct SIEM/EDR integration** — out of scope for a free OSINT tool. The SIGMA hints produced by CSAT are the intended interface with detection infrastructure.
+**Direct SIEM/EDR integration**: out of scope for a free OSINT tool. The SIGMA hints produced by CSAT are the intended interface with detection infrastructure.
 
 ---
 
@@ -227,4 +231,4 @@ If you work in CTI and have encountered friction points not listed here, open an
 
 ---
 
-*Roadmap derived from investigation CTI-UNC3386-2026 — TLP:WHITE*
+*Roadmap derived from investigation CTI-UNC3386-2026, TLP:WHITE*

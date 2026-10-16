@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+session_*.yaml
+flash_report_*.md
+flash_report_*.html
+!examples/*

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSAT: Structured Analytic Techniques</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" class="logo" aria-hidden="true"><g stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"><path d="M12 12V23"/><path d="M12 12L12 3M12 12L19 5.5M12 12L21 12M12 12L19 18.5M12 12L5 18.5M12 12L3 12M12 12L5 5.5"/></g><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
+    <div><strong>CSAT</strong><span>Structured Analytic Techniques for CTI</span></div>
+  </div>
+  <div class="case" id="caseInfo"></div>
+  <div class="actions">
+    <span class="savestate" id="saveState"></span>
+    <button class="btn ghost" data-action="new">New</button>
+    <button class="btn ghost" data-action="open">Open</button>
+    <button class="btn primary" data-action="save">Save</button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="steps" id="steps"></nav>
+  <main id="panel" class="panel"></main>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head"><h3 id="modalTitle"></h3><button class="icon" data-action="close-modal" aria-label="Close">✕</button></div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

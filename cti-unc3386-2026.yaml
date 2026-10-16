@@ -175,7 +175,7 @@ iw:
       observed: 'YES'
       observation_note: Zonetel AS132526 vs StarHub AS4657 confirmed via VirusTotal
 da:
-  leading_hypothesis: 'H1: UNC3886 — CHine APT targeting network edge devices telecom
+  leading_hypothesis: 'H1 UNC3886: CHine APT targeting network edge devices telecom
     sector apac'
   alternative_hypothesis: →  False flag or misattribution Chinese criminal actor mimicking
     APT TTPs
